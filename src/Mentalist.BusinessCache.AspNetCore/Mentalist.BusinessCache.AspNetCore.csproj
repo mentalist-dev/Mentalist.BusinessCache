@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net6.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<Version>0.1.0</Version>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<Authors>mentalist.dev</Authors>
+		<Company />
+		<Title>Caching Framework</Title>
+		<Description>Caching Framework</Description>
+		<PackageProjectUrl>https://github.com/mentalist-dev/Mentalist.BusinessCache</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/mentalist-dev/Mentalist.BusinessCache</RepositoryUrl>
+		<PackageTags>Cache</PackageTags>
+		<PackageReleaseNotes></PackageReleaseNotes>
+		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="..\..\LICENSE" Link="license\LICENSE">
+			<Pack>true</Pack>
+			<PackagePath></PackagePath>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Mentalist.BusinessCache\Mentalist.BusinessCache.csproj" />
+	</ItemGroup>
+
+</Project>
