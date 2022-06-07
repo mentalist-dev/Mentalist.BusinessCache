@@ -25,6 +25,8 @@ services.AddCache(config => config
 var provider = services.BuildServiceProvider();
 var cache = provider.GetRequiredService<ICache>();
 
+await cache.ValidateStorageAsync(CancellationToken.None);
+
 try
 {
     var metricServer = new MetricServer(port: 8899);

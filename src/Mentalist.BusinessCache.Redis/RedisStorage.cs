@@ -327,6 +327,13 @@ public class RedisStorage: ICacheStorage
         }
     }
 
+    public Task ValidateStorageAsync(CancellationToken token)
+    {
+        var value = BitConverter.GetBytes(DateTime.UtcNow.Ticks);
+        var options = new DistributedCacheEntryOptions {AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(10)};
+        return _distributedCache.SetAsync(Guid.NewGuid().ToString(), value, options, token);
+    }
+
     private async Task DistributedChannelConsumer(CancellationToken cancellationToken)
     {
         try

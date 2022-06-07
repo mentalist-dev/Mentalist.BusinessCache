@@ -8,6 +8,8 @@ public class CacheItem
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
     public DateTimeOffset? AbsoluteExpiration { get; init; }
     public bool IsExpired() => AbsoluteExpiration != null && AbsoluteExpiration < DateTimeOffset.UtcNow;
+    
+    internal CacheItemOptions? Options { get; init; }
 
     public virtual CacheItem? Create(ICacheSerializer serializer, byte[] buffer)
     {

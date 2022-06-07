@@ -10,6 +10,8 @@ public interface ICacheStorage
     CacheItem<T>? Get<T>(string key); 
     void Remove<T>(string key);
     void Refresh(CacheItem cacheItem);
+
+    Task ValidateStorageAsync(CancellationToken token);
 }
 
 public class CacheStorage: ICacheStorage
@@ -40,5 +42,10 @@ public class CacheStorage: ICacheStorage
     public void Refresh(CacheItem cacheItem)
     {
         // 
+    }
+
+    public Task ValidateStorageAsync(CancellationToken token)
+    {
+        return Task.CompletedTask;
     }
 }

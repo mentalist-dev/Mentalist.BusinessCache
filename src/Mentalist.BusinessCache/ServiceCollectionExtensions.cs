@@ -14,12 +14,7 @@ public static class ServiceCollectionExtensions
         {
             configure(configuration);
         }
-        else
-        {
-            configuration.DefaultAbsoluteExpiration(TimeSpan.FromHours(1));
-        }
 
-        services.TryAddSingleton<ICacheSerializer, CacheSerializer>();
         services.TryAddSingleton<ICache, Cache>();
 
         configuration.Complete();
@@ -44,7 +39,7 @@ public interface ICacheConfiguration
 internal class CacheConfiguration: ICacheConfiguration
 {
     private readonly IServiceCollection _services;
-    private TimeSpan _defaultAbsoluteExpiration;
+    private TimeSpan? _defaultAbsoluteExpiration;
     private bool _refreshAfterEviction;
     private bool _refreshAfterGet;
     private TimeSpan? _refreshAfterGetDelay;
@@ -119,7 +114,7 @@ internal class CacheConfiguration: ICacheConfiguration
     {
         var cacheOptions = new CacheOptions
         {
-            DefaultRelativeExpiration = _defaultAbsoluteExpiration,
+            DefaultRelativeExpiration = _defaultAbsoluteExpiration ?? TimeSpan.FromHours(1),
             RefreshAfterEviction = _refreshAfterEviction,
             RefreshAfterGet = _refreshAfterGet,
             RefreshAfterGetDelay = _refreshAfterGetDelay.GetValueOrDefault(TimeSpan.FromSeconds(10))
