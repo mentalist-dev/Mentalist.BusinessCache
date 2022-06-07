@@ -2,9 +2,10 @@
 
 public class CacheItem
 {
-    public string Id { get; } = Guid.NewGuid().ToString("N");
+    public string Id { get; init; } = Guid.NewGuid().ToString("N");
     public string Key { get; init; } = null!;
-    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    public string Type { get; init; } = string.Empty;
+    public DateTime Timestamp { get; init; } = DateTime.UtcNow;
     public DateTimeOffset? AbsoluteExpiration { get; init; }
     public bool IsExpired() => AbsoluteExpiration != null && AbsoluteExpiration < DateTimeOffset.UtcNow;
 
@@ -14,8 +15,13 @@ public class CacheItem
     }
 }
 
-public sealed class CacheItem<T> : CacheItem
+public class CacheItem<T> : CacheItem
 {
+    public CacheItem()
+    {
+        Type = typeof(T).GetTypeName();
+    }
+
     public T Value { get; init; } = default!;
 
     public override CacheItem? Create(ICacheSerializer serializer, byte[] buffer)

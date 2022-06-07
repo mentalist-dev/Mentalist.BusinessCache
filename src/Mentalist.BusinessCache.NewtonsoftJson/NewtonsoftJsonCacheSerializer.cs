@@ -1,19 +1,14 @@
 ﻿using System.Diagnostics;
-using System.Text.Json;
+using System.Text;
+using Newtonsoft.Json;
 
-namespace Mentalist.BusinessCache;
+namespace Mentalist.BusinessCache.NewtonsoftJson;
 
-public interface ICacheSerializer
-{
-    byte[] Serialize<T>(T value) where T: CacheItem;
-    T? Deserialize<T>(byte[] buffer) where T : CacheItem;
-}
-
-public class CacheSerializer : ICacheSerializer
+public class NewtonsoftJsonCacheSerializer: ICacheSerializer
 {
     private readonly ICacheMetrics _metrics;
 
-    public CacheSerializer(ICacheMetrics metrics)
+    public NewtonsoftJsonCacheSerializer(ICacheMetrics metrics)
     {
         _metrics = metrics;
     }
@@ -23,21 +18,20 @@ public class CacheSerializer : ICacheSerializer
         if (value == null) throw new ArgumentNullException(nameof(value));
         using var timer = _metrics.Serialize(value.Type);
 
-        using var stream = new MemoryStream();
-        JsonSerializer.Serialize(stream, value, value.GetType());
-
-        return stream.ToArray();
+        var content = JsonConvert.SerializeObject(value);
+        return Encoding.UTF8.GetBytes(content);
     }
 
     public T? Deserialize<T>(byte[] buffer) where T : CacheItem
     {
         var timer = Stopwatch.StartNew();
-        using var stream = new MemoryStream(buffer);
-        var result = JsonSerializer.Deserialize<T>(stream);
+
+        var result = JsonConvert.DeserializeObject<T>(Encoding.UTF8.GetString(buffer));
         if (result != null)
         {
             _metrics.Deserialized(result.Type, timer.Elapsed);
         }
+        
         return result;
     }
 }

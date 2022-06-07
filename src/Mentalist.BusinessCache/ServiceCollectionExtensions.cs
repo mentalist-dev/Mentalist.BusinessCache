@@ -21,7 +21,6 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<ICacheSerializer, CacheSerializer>();
         services.TryAddSingleton<ICache, Cache>();
-        services.TryAddSingleton<ICacheMetrics, CacheMetrics>();
 
         configuration.Complete();
 
@@ -34,25 +33,34 @@ public interface ICacheConfiguration
     internal IServiceCollection Services { get; }
 
     ICacheConfiguration DefaultAbsoluteExpiration(TimeSpan absoluteExpiration);
-    ICacheConfiguration CacheLifetime<TLifetime>() where TLifetime : class, ICacheLifetime;
-    ICacheConfiguration SecondLevel<TSecondLevelLayer>() where TSecondLevelLayer : class, ICacheSecondLevel;
+    ICacheConfiguration RefreshFromStorageAfterEviction(bool enabled = true);
+    ICacheConfiguration RefreshFromStorageAfterGet(bool enabled = true, int delayRefreshInMilliseconds = 10000);
+    ICacheConfiguration Lifetime<TLifetime>() where TLifetime : class, ICacheLifetime;
+    ICacheConfiguration Storage<TStorage>() where TStorage : class, ICacheStorage;
     ICacheConfiguration Metrics<TMetrics>() where TMetrics : class, ICacheMetrics;
+    ICacheConfiguration Serializer<TSerializer>() where TSerializer : class, ICacheSerializer;
 }
 
 internal class CacheConfiguration: ICacheConfiguration
 {
     private readonly IServiceCollection _services;
     private TimeSpan _defaultAbsoluteExpiration;
-    private Action<IServiceCollection> _configureCacheLifetime;
-    private Action<IServiceCollection> _configureCacheSecondLevel;
-    private Action<IServiceCollection> _configureCacheMetrics;
+    private bool _refreshAfterEviction;
+    private bool _refreshAfterGet;
+    private TimeSpan? _refreshAfterGetDelay;
+    private Action<IServiceCollection> _configureCacheLifetime = null!;
+    private Action<IServiceCollection> _configureCacheSecondLevel = null!;
+    private Action<IServiceCollection> _configureCacheMetrics = null!;
+    private Action<IServiceCollection> _configureSerializer = null!;
 
     public CacheConfiguration(IServiceCollection services)
     {
         _services = services;
-        _configureCacheLifetime = s => s.TryAddSingleton<ICacheLifetime, CacheLifetime>();
-        _configureCacheSecondLevel = s => s.TryAddSingleton<ICacheSecondLevel, CacheSecondLevel>();
-        _configureCacheMetrics = s => s.TryAddSingleton<ICacheMetrics, CacheMetrics>();
+
+        Lifetime<CacheLifetime>();
+        Storage<CacheStorage>();
+        Metrics<CacheMetrics>();
+        Serializer<CacheSerializer>();
     }
 
     IServiceCollection ICacheConfiguration.Services => _services;
@@ -63,15 +71,35 @@ internal class CacheConfiguration: ICacheConfiguration
         return this;
     }
 
-    public ICacheConfiguration CacheLifetime<TLifetime>() where TLifetime : class, ICacheLifetime
+    public ICacheConfiguration RefreshFromStorageAfterEviction(bool enabled = true)
+    {
+        _refreshAfterEviction = enabled;
+        return this;
+    }
+
+    public ICacheConfiguration RefreshFromStorageAfterGet(bool enabled = true, int delayRefreshInMilliseconds = 10000)
+    {
+        _refreshAfterGet = enabled;
+        if (delayRefreshInMilliseconds >= 0)
+        {
+            _refreshAfterGetDelay = TimeSpan.FromMilliseconds(delayRefreshInMilliseconds);
+        }
+        else
+        {
+            _refreshAfterGetDelay = TimeSpan.FromSeconds(10);
+        }
+        return this;
+    }
+
+    public ICacheConfiguration Lifetime<TLifetime>() where TLifetime : class, ICacheLifetime
     {
         _configureCacheLifetime = s => s.TryAddSingleton<ICacheLifetime, TLifetime>();
         return this;
     }
 
-    public ICacheConfiguration SecondLevel<TSecondLevelLayer>() where TSecondLevelLayer : class, ICacheSecondLevel
+    public ICacheConfiguration Storage<TSecondLevelLayer>() where TSecondLevelLayer : class, ICacheStorage
     {
-        _configureCacheSecondLevel = s => s.TryAddSingleton<ICacheSecondLevel, TSecondLevelLayer>();
+        _configureCacheSecondLevel = s => s.TryAddSingleton<ICacheStorage, TSecondLevelLayer>();
         return this;
     }
 
@@ -81,12 +109,27 @@ internal class CacheConfiguration: ICacheConfiguration
         return this;
     }
 
+    public ICacheConfiguration Serializer<TSerializer>() where TSerializer : class, ICacheSerializer
+    {
+        _configureSerializer = s => s.TryAddSingleton<ICacheSerializer, TSerializer>();
+        return this;
+    }
+
     internal void Complete()
     {
-        var cacheOptions = new CacheOptions {DefaultRelativeExpiration = _defaultAbsoluteExpiration};
+        var cacheOptions = new CacheOptions
+        {
+            DefaultRelativeExpiration = _defaultAbsoluteExpiration,
+            RefreshAfterEviction = _refreshAfterEviction,
+            RefreshAfterGet = _refreshAfterGet,
+            RefreshAfterGetDelay = _refreshAfterGetDelay.GetValueOrDefault(TimeSpan.FromSeconds(10))
+        };
+
         _services.AddSingleton(cacheOptions);
 
         _configureCacheLifetime(_services);
         _configureCacheSecondLevel(_services);
+        _configureCacheMetrics(_services);
+        _configureSerializer(_services);
     }
 }

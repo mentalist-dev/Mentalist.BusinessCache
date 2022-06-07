@@ -9,7 +9,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Serialization duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -18,7 +18,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Deserialization duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -27,7 +27,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Cache set duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -41,7 +41,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Cache get duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -55,7 +55,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Cache remove duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -74,7 +74,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Second level cache set duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -88,7 +88,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Second level cache get duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -102,7 +102,7 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "Second level cache remove duration",
         new HistogramConfiguration
         {
-            Buckets = Histogram.ExponentialBuckets(0.001, 2, 10),
+            Buckets = Histogram.ExponentialBuckets(0.001, 2, 12),
             LabelNames = new[] { "type" }
         });
 
@@ -114,6 +114,11 @@ public class PrometheusCacheMetrics: ICacheMetrics
     private readonly Counter _secondLevelMisCounter = Metrics.CreateCounter(
         "mentalist_second_level_cache_mis",
         "Second level cache misses",
+        new CounterConfiguration { LabelNames = new[] { "type" } });
+
+    private readonly Counter _secondLevelRetryCounter = Metrics.CreateCounter(
+        "mentalist_second_level_cache_retry",
+        "Second level cache retries",
         new CounterConfiguration { LabelNames = new[] { "type" } });
 
     private readonly Counter _secondLevelEvictedByNotificationCounter = Metrics.CreateCounter(
@@ -133,89 +138,98 @@ public class PrometheusCacheMetrics: ICacheMetrics
         "mentalist_second_level_cache_remove_queue_size",
         "Second level cache remove queue size");
 
-    public ITimer Serialize<T>()
+    private readonly Gauge _secondLevelCircuitBreakerGauge = Metrics.CreateGauge(
+        "mentalist_second_level_cache_circuit_breaker",
+        "Second level cache remove queue size");
+
+    public ITimer Serialize(string valueType)
     {
-        return new PrometheusTimer(_serializeHistogram, typeof(T).Name);
+        return new PrometheusTimer(_serializeHistogram, valueType);
     }
 
-    public ITimer Deserialize<T>()
+    public void Deserialized(string valueType, TimeSpan duration)
     {
-        return new PrometheusTimer(_deserializeHistogram, typeof(T).Name);
+        _deserializeHistogram.Labels(valueType).Observe(duration.TotalSeconds);
     }
 
     public ITimer Set<T>()
     {
-        return new PrometheusTimer(_setHistogram, typeof(T).Name);
+        return new PrometheusTimer(_setHistogram, typeof(T).GetTypeName());
     }
 
     public void SetFailed<T>()
     {
-        _setFailedCounter.Labels(typeof(T).Name).Inc();
+        _setFailedCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public ITimer Get<T>()
     {
-        return new PrometheusTimer(_getHistogram, typeof(T).Name);
+        return new PrometheusTimer(_getHistogram, typeof(T).GetTypeName());
     }
 
     public void GetFailed<T>()
     {
-        _getFailedCounter.Labels(typeof(T).Name).Inc();
+        _getFailedCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public ITimer Remove<T>()
     {
-        return new PrometheusTimer(_removeHistogram, typeof(T).Name);
+        return new PrometheusTimer(_removeHistogram, typeof(T).GetTypeName());
     }
 
     public void Hit<T>()
     {
-        _hitCounter.Labels(typeof(T).Name).Inc();
+        _hitCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public void Mis<T>()
     {
-        _misCounter.Labels(typeof(T).Name).Inc();
+        _misCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public ITimer SecondLevelSet<T>()
     {
-        return new PrometheusTimer(_secondLevelSetHistogram, typeof(T).Name);
+        return new PrometheusTimer(_secondLevelSetHistogram, typeof(T).GetTypeName());
     }
 
     public void SecondLevelSetFailed<T>()
     {
-        _secondLevelSetFailedCounter.Labels(typeof(T).Name).Inc();
+        _secondLevelSetFailedCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public ITimer SecondLevelGet<T>()
     {
-        return new PrometheusTimer(_secondLevelGetHistogram, typeof(T).Name);
+        return new PrometheusTimer(_secondLevelGetHistogram, typeof(T).GetTypeName());
     }
 
     public void SecondLevelGetFailed<T>()
     {
-        _secondLevelGetFailedCounter.Labels(typeof(T).Name).Inc();
+        _secondLevelGetFailedCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public ITimer SecondLevelRemove<T>()
     {
-        return new PrometheusTimer(_secondLevelRemoveHistogram, typeof(T).Name);
+        return new PrometheusTimer(_secondLevelRemoveHistogram, typeof(T).GetTypeName());
     }
 
     public void SecondLevelHit<T>()
     {
-        _secondLevelHitCounter.Labels(typeof(T).Name).Inc();
+        _secondLevelHitCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
     public void SecondLevelMis<T>()
     {
-        _secondLevelMisCounter.Labels(typeof(T).Name).Inc();
+        _secondLevelMisCounter.Labels(typeof(T).GetTypeName()).Inc();
     }
 
-    public void SecondLevelEvictedByNotification<T>()
+    public void SecondLevelRetry<T>()
     {
-        _secondLevelEvictedByNotificationCounter.Labels(typeof(T).Name).Inc();
+        _secondLevelRetryCounter.Labels(typeof(T).GetTypeName()).Inc();
+    }
+
+    public void EvictedByNotification(string type)
+    {
+        _secondLevelEvictedByNotificationCounter.Labels(type).Inc();
     }
 
     public void ReportSecondLevelSetQueueSize(int size)
@@ -231,6 +245,11 @@ public class PrometheusCacheMetrics: ICacheMetrics
     public void ReportSecondLevelRemoveQueueSize(int size)
     {
         _secondLevelRemoveQueueSizeGauge.Set(size);
+    }
+
+    public void ReportSecondLevelCircuitBreaker(bool isOpen)
+    {
+        _secondLevelCircuitBreakerGauge.Set(isOpen ? 1 : 0);
     }
 
     private sealed class PrometheusTimer : ITimer

@@ -3,6 +3,7 @@ using Mentalist.BusinessCache.Prometheus;
 using Mentalist.BusinessCache.Redis;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Prometheus;
 
 var redisConnectionString = "redis:6389,connectTimeout=10000,connectRetry=5,keepAlive=60,syncTimeout=200,abortConnect=false";
 
@@ -13,12 +14,26 @@ services.AddLogging(builder =>
 });
 
 services.AddCache(config => config
-    .UseRedis(new RedisCacheOptions {RedisConnectionString = redisConnectionString})
+    .RefreshFromStorageAfterGet()
+    .UseRedis(new RedisCacheOptions(redisConnectionString)
+        .EnableGetRetries()
+        .EnableCircuitBreaker(exceptionCount: 2, breakDurationInMilliseconds: 10000)
+    )
     .UsePrometheusMetrics()
 );
 
 var provider = services.BuildServiceProvider();
 var cache = provider.GetRequiredService<ICache>();
+
+try
+{
+    var metricServer = new MetricServer(port: 8899);
+    metricServer.Start();
+}
+catch
+{
+    Console.WriteLine("Unable to start metrics server");
+}
 
 var finished = false;
 while (!finished)

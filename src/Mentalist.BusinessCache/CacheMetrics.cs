@@ -6,8 +6,8 @@ public interface ITimer : IDisposable
 
 public interface ICacheMetrics
 {
-    ITimer Serialize<T>();
-    ITimer Deserialize<T>();
+    ITimer Serialize(string valueType);
+    void Deserialized(string valueType, TimeSpan duration);
 
     ITimer Set<T>();
     void SetFailed<T>();
@@ -29,24 +29,26 @@ public interface ICacheMetrics
 
     void SecondLevelHit<T>();
     void SecondLevelMis<T>();
+    void SecondLevelRetry<T>();
 
-    void SecondLevelEvictedByNotification<T>();
+    void EvictedByNotification(string type);
 
     void ReportSecondLevelSetQueueSize(int size);
     void ReportSecondLevelRefreshQueueSize(int size);
     void ReportSecondLevelRemoveQueueSize(int size);
+    void ReportSecondLevelCircuitBreaker(bool isOpen);
 }
 
 public class CacheMetrics: ICacheMetrics
 {
-    public ITimer Serialize<T>()
+    public ITimer Serialize(string valueType)
     {
         return new Timer();
     }
 
-    public ITimer Deserialize<T>()
+    public void Deserialized(string valueType, TimeSpan duration)
     {
-        return new Timer();
+        //
     }
 
     public ITimer Set<T>()
@@ -119,7 +121,12 @@ public class CacheMetrics: ICacheMetrics
         //
     }
 
-    public void SecondLevelEvictedByNotification<T>()
+    public void SecondLevelRetry<T>()
+    {
+        //
+    }
+
+    public void EvictedByNotification(string type)
     {
         //
     }
@@ -135,6 +142,11 @@ public class CacheMetrics: ICacheMetrics
     }
 
     public void ReportSecondLevelRemoveQueueSize(int size)
+    {
+        //
+    }
+
+    public void ReportSecondLevelCircuitBreaker(bool isOpen)
     {
         //
     }

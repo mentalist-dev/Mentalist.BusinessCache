@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Mentalist.BusinessCache.Redis;
@@ -12,7 +14,10 @@ public static class CacheConfigurationExtensions
         configuration.Services.TryAddSingleton(options);
         configuration.Services.TryAddSingleton(new RedisConnectionOptions { ConnectionString = options.RedisConnectionString });
         configuration.Services.TryAddSingleton<IRedisConnection, RedisConnection>();
-        
-        return configuration.SecondLevel<RedisCacheSecondLevel>();
+
+        configuration.Services.AddSingleton<RedisCache>();
+        configuration.Services.AddSingleton<IDistributedCache, RedisDistributedCache>();
+
+        return configuration.Storage<RedisStorage>();
     }
 }

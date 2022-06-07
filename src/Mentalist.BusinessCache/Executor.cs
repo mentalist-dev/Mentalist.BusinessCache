@@ -13,7 +13,7 @@ internal static class Executor
         {
             try
             {
-                await action().ConfigureAwait(false);
+                await action();
                 finished = true;
             }
             catch (Exception e) when (e is not OperationCanceledException)
@@ -24,7 +24,7 @@ internal static class Executor
                     timer.Restart();
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(1), token);
             }
         }
     }

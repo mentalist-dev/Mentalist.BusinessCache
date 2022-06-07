@@ -76,8 +76,7 @@ public class RedisConnection: IRedisConnection, IDisposable
         token.ThrowIfCancellationRequested();
 
         _connection = await ConnectionMultiplexer
-            .ConnectAsync(_configurationOptions)
-            .ConfigureAwait(false);
+            .ConnectAsync(_configurationOptions);
 
         _connectionCreated.SetResult(_connection);
     }

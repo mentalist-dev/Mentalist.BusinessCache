@@ -1,13 +1,12 @@
 ﻿using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
 namespace Mentalist.BusinessCache.Redis;
 
-public class RedisCacheSecondLevel: ICacheSecondLevel
+public class RedisStorage: ICacheStorage
 {
     private readonly Channel<CacheItem> _distributedChannel;
     private readonly Channel<CacheItem> _refreshChannel;
@@ -17,7 +16,6 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
     private readonly RedisCacheOptions _cacheOptions;
     private readonly IRedisConnection _connection;
     private readonly ICacheSerializer _serializer;
-    private readonly IMemoryCache _memoryCache;
     private readonly IDistributedCache _distributedCache;
     private readonly ILogger<RedisConnection> _logger;
     private readonly ICacheMetrics _metrics;
@@ -26,10 +24,13 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
     private int _refreshQueueSize;
     private int _removeQueueSize;
 
-    public RedisCacheSecondLevel(RedisCacheOptions cacheOptions
+    private bool _circuitBreakerOpen;
+    private DateTime _circuitBreakerOpenTimestamp = DateTime.MinValue;
+    private int _consecutiveExceptions;
+
+    public RedisStorage(RedisCacheOptions cacheOptions
         , IRedisConnection connection
         , ICacheSerializer serializer
-        , IMemoryCache memoryCache
         , IDistributedCache distributedCache
         , ICacheLifetime lifetime
         , ILogger<RedisConnection> logger
@@ -38,7 +39,6 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
         _cacheOptions = cacheOptions;
         _connection = connection;
         _serializer = serializer;
-        _memoryCache = memoryCache;
         _distributedCache = distributedCache;
         _logger = logger;
         _metrics = metrics;
@@ -77,75 +77,104 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
             TaskScheduler.Default);
     }
 
+    public event CacheItemUpdateEventHandler? Updated;
+    public event CacheItemEvictedEventHandler? Evicted;
+
     public void Set<T>(CacheItem<T> cacheItem)
     {
         using var timer = _metrics.SecondLevelSet<T>();
 
-        if (_distributedChannel.Writer.TryWrite(cacheItem))
-        {
-            var queueSize = Interlocked.Increment(ref _setQueueSize);
-            _metrics.ReportSecondLevelSetQueueSize(queueSize);
-        }
-        else
+        if (!SetInternal(cacheItem))
         {
             _metrics.SecondLevelSetFailed<T>();
         }
     }
 
-    public async Task<T?> GetAsync<T>(string key, CancellationToken token)
+    private bool SetInternal(CacheItem cacheItem)
     {
-        using var timer = _metrics.SecondLevelGet<T>();
-
-        try
+        if (_distributedChannel.Writer.TryWrite(cacheItem))
         {
-            var buffer = await _distributedCache.GetAsync(key, token);
-            if (buffer != null)
-            {
-                var item = _serializer.Deserialize<CacheItem<T>>(buffer);
-                if (item != null)
-                {
-                    if (!item.IsExpired())
-                    {
-                        _metrics.SecondLevelHit<T>();
-
-                        _memoryCache.Set(key, item, new MemoryCacheEntryOptions { AbsoluteExpiration = item.AbsoluteExpiration });
-                        return item.Value;
-                    }
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            _metrics.SecondLevelGetFailed<T>();
-
-            if (_logger.IsEnabled(LogLevel.Debug))
-                _logger.LogDebug(e, "Unable to get {CacheItemType} key {CacheKey} from distributed cache", typeof(T), key);
+            var queueSize = Interlocked.Increment(ref _setQueueSize);
+            _metrics.ReportSecondLevelSetQueueSize(queueSize);
+            return true;
         }
 
-        _metrics.SecondLevelMis<T>();
-
-        return default;
+        return false;
     }
 
-    public T? Get<T>(string key)
+    public async Task<CacheItem<T>?> GetAsync<T>(string key, CancellationToken token)
     {
         using var timer = _metrics.SecondLevelGet<T>();
 
+        if (_cacheOptions.CircuitBreakerEnabled && 
+            _circuitBreakerOpen && 
+            _circuitBreakerOpenTimestamp > DateTime.UtcNow.Subtract(_cacheOptions.CircuitBreakerDuration))
+        {
+            _metrics.ReportSecondLevelCircuitBreaker(true);
+            return null;
+        }
+
+        if (_circuitBreakerOpen)
+        {
+            _circuitBreakerOpen = false;
+            _logger.LogWarning("Cache circuit breaker closed");
+        }
+
+        _metrics.ReportSecondLevelCircuitBreaker(false);
+
         try
         {
-            var buffer = _distributedCache.Get(key);
+            byte[]? buffer = null;
+            var finished = false;
+            var counter = 0;
+            while (!finished)
+            {
+                counter += 1;
+
+                if (counter > 1)
+                {
+                    _metrics.SecondLevelRetry<T>();
+                }
+
+                try
+                {
+                    buffer = await _distributedCache.GetAsync(key, token);
+                    finished = true;
+
+                    if (_cacheOptions.CircuitBreakerEnabled)
+                    {
+                        Interlocked.Exchange(ref _consecutiveExceptions, 0);
+                    }
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    if (!_cacheOptions.RetriesEnabled || counter > _cacheOptions.RetriesCount)
+                    {
+                        throw;
+                    }
+
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug(e,
+                            "Unable to get {CacheItemType} key {CacheKey} from distributed cache. Will retry in {CacheRetryDelay}ms.",
+                            typeof(T), key, _cacheOptions.RetriesDelay
+                        );
+                    }
+
+                    if (_cacheOptions.RetriesDelay > 0)
+                    {
+                        Thread.Sleep(_cacheOptions.RetriesDelay);
+                    }
+                }
+            }
+
             if (buffer != null)
             {
                 var item = _serializer.Deserialize<CacheItem<T>>(buffer);
                 if (item != null)
                 {
-                    if (!item.IsExpired())
-                    {
-                        _metrics.SecondLevelHit<T>();
-
-                        _memoryCache.Set(key, item, new MemoryCacheEntryOptions { AbsoluteExpiration = item.AbsoluteExpiration });
-                        return item.Value;
-                    }
+                    _metrics.SecondLevelHit<T>();
+                    return item;
                 }
             }
         }
@@ -155,15 +184,132 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
 
             if (_logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug(e, "Unable to get {CacheItemType} key {CacheKey} from distributed cache", typeof(T), key);
+
+            if (_cacheOptions.CircuitBreakerEnabled)
+            {
+                var exceptionCount = Interlocked.Increment(ref _consecutiveExceptions);
+                if (exceptionCount >= _cacheOptions.CircuitBreakerExceptionCount)
+                {
+                    _circuitBreakerOpenTimestamp = DateTime.UtcNow;
+                    _circuitBreakerOpen = true;
+                    _metrics.ReportSecondLevelCircuitBreaker(true);
+                    _logger.LogWarning("Cache circuit breaker opened");
+                    return null;
+                }
+            }
         }
 
         _metrics.SecondLevelMis<T>();
 
-        return default;
+        return null;
+    }
+
+    public CacheItem<T>? Get<T>(string key)
+    {
+        using var timer = _metrics.SecondLevelGet<T>();
+
+        if (_cacheOptions.CircuitBreakerEnabled &&
+            _circuitBreakerOpen &&
+            _circuitBreakerOpenTimestamp > DateTime.UtcNow.Subtract(_cacheOptions.CircuitBreakerDuration))
+        {
+            _metrics.ReportSecondLevelCircuitBreaker(true);
+            return null;
+        }
+
+        if (_circuitBreakerOpen)
+        {
+            _circuitBreakerOpen = false;
+            _logger.LogWarning("Cache circuit breaker closed");
+        }
+
+        _metrics.ReportSecondLevelCircuitBreaker(false);
+
+        try
+        {
+            byte[]? buffer = null;
+            var finished = false;
+            var counter = 0;
+            while (!finished)
+            {
+                counter += 1;
+
+                if (counter > 1)
+                {
+                    _metrics.SecondLevelRetry<T>();
+                }
+
+                try
+                {
+                    buffer = _distributedCache.Get(key);
+                    finished = true;
+
+                    if (_cacheOptions.CircuitBreakerEnabled)
+                    {
+                        Interlocked.Exchange(ref _consecutiveExceptions, 0);
+                    }
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    if (!_cacheOptions.RetriesEnabled || counter > _cacheOptions.RetriesCount)
+                    {
+                        throw;
+                    }
+
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug(e,
+                            "Unable to get {CacheItemType} key {CacheKey} from distributed cache. Will retry in {CacheRetryDelay}ms.",
+                            typeof(T), key, _cacheOptions.RetriesDelay
+                        );
+                    }
+
+                    if (_cacheOptions.RetriesDelay > 0)
+                    {
+                        Thread.Sleep(_cacheOptions.RetriesDelay);
+                    }
+                }
+            }
+
+            if (buffer != null)
+            {
+                var item = _serializer.Deserialize<CacheItem<T>>(buffer);
+                if (item != null)
+                {
+                    _metrics.SecondLevelHit<T>();
+                    return item;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            _metrics.SecondLevelGetFailed<T>();
+
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug(e, "Unable to get {CacheItemType} key {CacheKey} from distributed cache", typeof(T), key);
+
+            if (_cacheOptions.CircuitBreakerEnabled)
+            {
+                var exceptionCount = Interlocked.Increment(ref _consecutiveExceptions);
+                if (exceptionCount >= _cacheOptions.CircuitBreakerExceptionCount)
+                {
+                    _circuitBreakerOpenTimestamp = DateTime.UtcNow;
+                    _circuitBreakerOpen = true;
+                    _metrics.ReportSecondLevelCircuitBreaker(true);
+                    _logger.LogWarning("Cache circuit breaker opened");
+                    return null;
+                }
+            }
+        }
+
+        _metrics.SecondLevelMis<T>();
+
+        return null;
     }
 
     public void Remove<T>(string key)
     {
+        using var timer = _metrics.SecondLevelRemove<T>();
+
         var cacheItem = new CacheItem {Key = key};
         if (_removeChannel.Writer.TryWrite(cacheItem))
         {
@@ -172,12 +318,7 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
         }
     }
 
-    public void Refresh<T>(CacheItem<T> cacheItem)
-    {
-        RefreshInternal(cacheItem);
-    }
-
-    private void RefreshInternal(CacheItem cacheItem)
+    public void Refresh(CacheItem cacheItem)
     {
         if (_refreshChannel.Writer.TryWrite(cacheItem))
         {
@@ -194,24 +335,17 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
             channel.Subscribe(redis =>
             {
                 var message = redis.ToString();
-                var remove = char.ToUpper(message[0]) == 'R';
+                var action = char.ToUpper(message[0]);
+                var remove = action == 'R';
                 var id = message[1..33];
                 var key = message[33..];
 
                 if (_logger.IsEnabled(LogLevel.Debug))
-                    _logger.LogDebug("Notification received. Cache key {CacheKey}. Removal = {IsRemoval}.", key, remove.ToString());
-
-                var item = _memoryCache.Get<CacheItem>(key);
-                if (item != null && (item.Id != id || remove))
                 {
-                    _memoryCache.Remove(key);
-                    _logger.LogInformation("Subscription evicted memory cache item with key {CacheKey}", key);
-
-                    if (!remove)
-                    {
-                        RefreshInternal(item);
-                    }
+                    _logger.LogDebug("Notification received. Cache key {CacheKey}. Removed = {IsCacheRemove}/{CacheAction}.", key, remove.ToString(), action);
                 }
+
+                Evicted?.Invoke(this, new CacheItemEvictedEventArgs(id, key, remove));
             });
 
             await foreach (var item in _distributedChannel.Reader.ReadAllAsync(cancellationToken))
@@ -278,23 +412,16 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
                     var queueSize = Interlocked.Decrement(ref _refreshQueueSize);
                     _metrics.ReportSecondLevelRefreshQueueSize(queueSize);
 
-                    var key = item.Key;
-                    var buffer = await _distributedCache.GetAsync(key, cancellationToken);
-                    if (buffer != null)
+                    if (_logger.IsEnabled(LogLevel.Debug))
                     {
-                        var clone = item.Create(_serializer, buffer);
-                        if (clone != null && clone.Timestamp < item.Timestamp)
-                        {
-                            // distributed cache contains older item
-                            _distributedChannel.Writer.TryWrite(item);
-                            _logger.LogDebug("Scheduled refresh of distributed cache item with key {CacheKey} from memory cache", key);
-                        }
-                        else if (clone != null && !clone.IsExpired())
-                        {
-                            _memoryCache.Set(key, clone, new MemoryCacheEntryOptions { AbsoluteExpiration = item.AbsoluteExpiration });
-                            _logger.LogDebug("Refreshed memory cache item with key {CacheKey} from distributed cache", key);
-                        }
+                        _logger.LogDebug("Refreshing item with key {CacheKey}", item.Key);
                     }
+
+                    await Executor.Execute(
+                        () => Refresh(item, cancellationToken),
+                        _logger, cancellationToken,
+                        "Unable to refresh distributed cache value"
+                    );
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
@@ -316,6 +443,34 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
         }
     }
 
+    private async Task Refresh(CacheItem item, CancellationToken cancellationToken)
+    {
+        var key = item.Key;
+        if (key == "51e694a9-75ef-44bb-b51e-67fbe57ecc5d.OperationContextAccessor.Users")
+        {
+            System.Diagnostics.Trace.WriteLine("ouch");
+        }
+        var buffer = await _distributedCache.GetAsync(key, cancellationToken);
+        if (buffer != null)
+        {
+            var clone = item.Create(_serializer, buffer);
+            if (clone != null && clone.Timestamp < item.Timestamp)
+            {
+                // distributed cache contains older item (lets update it)
+                SetInternal(item);
+
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug("Scheduled refresh of distributed cache item with key {CacheKey} from memory cache", key);
+                }
+            }
+            else if (clone != null && !clone.IsExpired())
+            {
+                Updated?.Invoke(this, new CacheItemUpdateEventArgs(clone, item.AbsoluteExpiration));
+            }
+        }
+    }
+
     private async Task RemoveChannelConsumer(CancellationToken cancellationToken)
     {
         try
@@ -324,19 +479,19 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
             {
                 try
                 {
-                    var queueSize = Interlocked.Decrement(ref _refreshQueueSize);
-                    _metrics.ReportSecondLevelRefreshQueueSize(queueSize);
+                    var queueSize = Interlocked.Decrement(ref _removeQueueSize);
+                    _metrics.ReportSecondLevelRemoveQueueSize(queueSize);
 
-                    var id = item.Id;
-                    var key = item.Key;
-                    await _distributedCache.RemoveAsync(key, cancellationToken);
-                    
                     if (_logger.IsEnabled(LogLevel.Debug))
-                        _logger.LogDebug("Removed item with key {CacheKey}", key);
+                    {
+                        _logger.LogDebug("Removing item with key {CacheKey}", item.Key);
+                    }
 
-                    var message = $"R{id}{key}";
-                    var channel = _connection.Create(_cacheOptions.RedisSubscriptionChannel);
-                    channel.Publish(new RedisValue(message));
+                    await Executor.Execute(
+                        () => Remove(item, cancellationToken),
+                        _logger, cancellationToken,
+                        "Unable to remove distributed cache value"
+                    );
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
@@ -356,5 +511,16 @@ public class RedisCacheSecondLevel: ICacheSecondLevel
         {
             _removeChannel.Writer.TryComplete();
         }
+    }
+
+    private async Task Remove(CacheItem item, CancellationToken cancellationToken)
+    {
+        var id = item.Id;
+        var key = item.Key;
+        await _distributedCache.RemoveAsync(key, cancellationToken);
+
+        var message = $"R{id}{key}";
+        var channel = _connection.Create(_cacheOptions.RedisSubscriptionChannel);
+        channel.Publish(new RedisValue(message));
     }
 }
