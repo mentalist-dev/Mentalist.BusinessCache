@@ -14,10 +14,10 @@ internal class RedisSubscriber: IRedisSubscriber
 {
     private readonly Channel<RedisValue> _publications = Channel.CreateBounded<RedisValue>(100_000);
     private readonly List<Action<RedisValue>> _subscriptions = new();
-    private readonly string _channel;
+    private readonly RedisChannel _channel;
     private readonly ILogger _logger;
 
-    public RedisSubscriber(string channel, Task<ConnectionMultiplexer> connect, ILogger logger, CancellationToken token)
+    public RedisSubscriber(RedisChannel channel, Task<ConnectionMultiplexer> connect, ILogger logger, CancellationToken token)
     {
         _channel = channel;
         _logger = logger;

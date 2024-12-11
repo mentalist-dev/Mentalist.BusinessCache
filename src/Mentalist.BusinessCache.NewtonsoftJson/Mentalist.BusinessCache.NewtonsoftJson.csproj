@@ -1,7 +1,7 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFramework>net6.0</TargetFramework>
+		<TargetFrameworks>net8.0;net9.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<Version>0.1.0</Version>
@@ -16,7 +16,6 @@
 		<RepositoryUrl>https://github.com/mentalist-dev/Mentalist.BusinessCache</RepositoryUrl>
 		<PackageTags>Cache Serializer NewtonSoftJson</PackageTags>
 		<PackageReleaseNotes></PackageReleaseNotes>
-		<PackageLicenseFile>LICENSE</PackageLicenseFile>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -26,15 +25,18 @@
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
 	</PropertyGroup>
 
+	<PropertyGroup>
+		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+	</PropertyGroup>
+
 	<ItemGroup>
-		<None Include="..\..\LICENSE" Link="license\LICENSE">
-			<Pack>true</Pack>
-			<PackagePath></PackagePath>
-		</None>
+		<None Include="..\..\README.md" Link="README.md" Pack="true" PackagePath="/" />
+		<None Include="..\..\LICENSE" Link="LICENSE" Pack="true" PackagePath="/" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
 	</ItemGroup>
 
 	<ItemGroup>

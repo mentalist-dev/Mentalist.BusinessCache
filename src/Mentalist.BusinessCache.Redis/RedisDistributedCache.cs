@@ -3,52 +3,45 @@ using Microsoft.Extensions.Caching.StackExchangeRedis;
 
 namespace Mentalist.BusinessCache.Redis;
 
-internal class RedisDistributedCache: IDistributedCache
+internal class RedisDistributedCache(RedisCache cache) : IDistributedCache
 {
-    private readonly RedisCache _cache;
-
-    public RedisDistributedCache(RedisCache cache)
+    public byte[]? Get(string key)
     {
-        _cache = cache;
+        return cache.Get(key);
     }
 
-    public byte[] Get(string key)
+    public Task<byte[]?> GetAsync(string key, CancellationToken token = new())
     {
-        return _cache.Get(key);
-    }
-
-    public Task<byte[]> GetAsync(string key, CancellationToken token = new())
-    {
-        return _cache.GetAsync(key, token);
+        return cache.GetAsync(key, token);
     }
 
     public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
     {
-        _cache.Set(key, value, options);
+        cache.Set(key, value, options);
     }
 
     public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = new())
     {
-        return _cache.SetAsync(key, value, options, token);
+        return cache.SetAsync(key, value, options, token);
     }
 
     public void Refresh(string key)
     {
-        _cache.Refresh(key);
+        cache.Refresh(key);
     }
 
     public Task RefreshAsync(string key, CancellationToken token = new())
     {
-        return _cache.RefreshAsync(key, token);
+        return cache.RefreshAsync(key, token);
     }
 
     public void Remove(string key)
     {
-        _cache.Remove(key);
+        cache.Remove(key);
     }
 
     public Task RemoveAsync(string key, CancellationToken token = new())
     {
-        return _cache.RemoveAsync(key, token);
+        return cache.RemoveAsync(key, token);
     }
 }

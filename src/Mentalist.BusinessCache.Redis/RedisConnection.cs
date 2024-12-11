@@ -6,7 +6,7 @@ namespace Mentalist.BusinessCache.Redis;
 
 public interface IRedisConnection
 {
-    IRedisSubscriber Create(string channel);
+    IRedisSubscriber Create(RedisChannel channel);
 }
 
 public class RedisConnection: IRedisConnection, IDisposable
@@ -81,13 +81,13 @@ public class RedisConnection: IRedisConnection, IDisposable
         _connectionCreated.SetResult(_connection);
     }
 
-    public IRedisSubscriber Create(string channel)
+    public IRedisSubscriber Create(RedisChannel channel)
     {
-        var value = _subscribers.GetOrAdd(channel, new Lazy<RedisSubscriber>(() => CreateSubscriber(channel)));
+        var value = _subscribers.GetOrAdd(channel.ToString(), new Lazy<RedisSubscriber>(() => CreateSubscriber(channel)));
         return value.Value;
     }
 
-    private RedisSubscriber CreateSubscriber(string channel)
+    private RedisSubscriber CreateSubscriber(RedisChannel channel)
     {
         return new RedisSubscriber(channel, _connectionCreated.Task, _logger, _lifetime.ApplicationStopping);
     }

@@ -338,7 +338,7 @@ public class RedisStorage: ICacheStorage
     {
         try
         {
-            var channel = _connection.Create(_cacheOptions.RedisSubscriptionChannel);
+            var channel = _connection.Create(new RedisChannel(_cacheOptions.RedisSubscriptionChannel, RedisChannel.PatternMode.Auto));
             channel.Subscribe(redis =>
             {
                 var message = redis.ToString();
@@ -527,7 +527,7 @@ public class RedisStorage: ICacheStorage
         await _distributedCache.RemoveAsync(key, cancellationToken);
 
         var message = $"R{id}{key}";
-        var channel = _connection.Create(_cacheOptions.RedisSubscriptionChannel);
+        var channel = _connection.Create(new RedisChannel(_cacheOptions.RedisSubscriptionChannel, RedisChannel.PatternMode.Auto));
         channel.Publish(new RedisValue(message));
     }
 }
