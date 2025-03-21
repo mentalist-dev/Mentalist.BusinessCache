@@ -1,1 +1,1 @@
-dotnet pack -o packages /p:Version=3.0.0 -c Release --include-symbols src\Mentalist.BusinessCache.sln
+dotnet pack -o packages /p:Version=3.1.0 -c Release --include-symbols src\Mentalist.BusinessCache.sln
