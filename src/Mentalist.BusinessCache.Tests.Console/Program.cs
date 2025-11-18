@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Prometheus;
 
-var redisConnectionString = "redis:6389,connectTimeout=10000,connectRetry=5,keepAlive=60,syncTimeout=200,abortConnect=false";
+var redisConnectionString = "localhost:6389,connectTimeout=10000,connectRetry=5,keepAlive=60,syncTimeout=200,abortConnect=false";
 
 var services = new ServiceCollection();
 services.AddLogging(builder =>
