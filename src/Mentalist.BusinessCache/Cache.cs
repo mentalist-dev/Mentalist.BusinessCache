@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Mentalist.BusinessCache;
@@ -26,6 +25,11 @@ public class Cache : ICache
     private readonly ICacheStorage _storage;
     private readonly ILogger<Cache> _logger;
     private readonly ICacheMetrics _metrics;
+
+    private TimeSpan RefreshDelaysMaxAge =>
+        _options.RefreshAfterGetDelay <= TimeSpan.Zero
+            ? TimeSpan.FromMinutes(10)
+            : TimeSpan.FromTicks(_options.RefreshAfterGetDelay.Ticks * 10);
 
     public Cache(CacheOptions options
         , IMemoryCache memoryCache
@@ -65,14 +69,7 @@ public class Cache : ICache
         {
             _memoryCache.Remove(cacheKey);
 
-            if (!string.IsNullOrWhiteSpace(item.Type))
-            {
-                _metrics.EvictedByNotification(item.Type);
-            }
-            else
-            {
-                _metrics.EvictedByNotification("-");
-            }
+            _metrics.EvictedByNotification(!string.IsNullOrWhiteSpace(item.Type) ? item.Type : "-");
 
             if (_logger.IsEnabled(LogLevel.Debug))
             {
@@ -287,36 +284,40 @@ public class Cache : ICache
         return item;
     }
 
-    private readonly ConcurrentDictionary<string, Delay> _refreshDelays = new();
+    // private readonly ConcurrentDictionary<string, Delay> _refreshDelays = new();
+    private readonly IMemoryCache _refreshDelays = new MemoryCache(new MemoryCacheOptions());
 
     private void RefreshAfterGet<T>(CacheItem<T> item)
     {
-        if (_options.RefreshAfterGet)
+        if (!_options.RefreshAfterGet)
         {
-            if (_options.RefreshAfterGetDelay <= TimeSpan.Zero)
-            {
-                _storage.Refresh(item);
-            }
-            else
-            {
-                var delay = new Delay {Timestamp = DateTime.UtcNow};
-                var value = _refreshDelays.AddOrUpdate(item.Key, delay, (_, current) =>
-                    current.Timestamp < DateTime.UtcNow.Subtract(_options.RefreshAfterGetDelay)
-                        ? delay
-                        : current
-                );
-
-                if (value.Id == delay.Id)
-                {
-                    _storage.Refresh(item);
-                }
-            }
+            return;
         }
-    }
 
-    private sealed class Delay
-    {
-        public Guid Id { get; } = Guid.NewGuid();
-        public DateTime Timestamp { get; init; }
+        if (_options.RefreshAfterGetDelay <= TimeSpan.Zero)
+        {
+            _storage.Refresh(item);
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+
+        // Use MemoryCache to store "last refresh time" per key with an absolute expiration
+        var lastRefresh = _refreshDelays.GetOrCreate(item.Key, entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = RefreshDelaysMaxAge;
+            return now;
+        });
+
+        // only refresh if we’re past the delay
+        if (now - lastRefresh >= _options.RefreshAfterGetDelay)
+        {
+            _refreshDelays.Set(item.Key, now, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = RefreshDelaysMaxAge
+            });
+
+            _storage.Refresh(item);
+        }
     }
 }

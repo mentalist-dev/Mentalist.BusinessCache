@@ -163,7 +163,7 @@ public class RedisStorage: ICacheStorage
 
                     if (_cacheOptions.RetriesDelay > 0)
                     {
-                        Thread.Sleep(_cacheOptions.RetriesDelay);
+                        await Task.Delay(_cacheOptions.RetriesDelay, token);
                     }
                 }
             }

@@ -13,7 +13,8 @@ public interface IRedisSubscriber
 internal class RedisSubscriber: IRedisSubscriber
 {
     private readonly Channel<RedisValue> _publications = Channel.CreateBounded<RedisValue>(100_000);
-    private readonly List<Action<RedisValue>> _subscriptions = new();
+    private readonly List<Action<RedisValue>> _subscriptions = [];
+    private readonly object _subscriptionsLock = new();
     private readonly RedisChannel _channel;
     private readonly ILogger _logger;
 
@@ -31,7 +32,10 @@ internal class RedisSubscriber: IRedisSubscriber
 
     public void Subscribe(Action<RedisValue> onMessage)
     {
-        _subscriptions.Add(onMessage);
+        lock (_subscriptionsLock)
+        {
+            _subscriptions.Add(onMessage);
+        }
     }
 
     public void Publish(RedisValue value)
@@ -105,7 +109,13 @@ internal class RedisSubscriber: IRedisSubscriber
     {
         if (!value.HasValue) return;
 
-        foreach (var onMessage in _subscriptions)
+        Action<RedisValue>[] snapshot;
+        lock (_subscriptionsLock)
+        {
+            snapshot = _subscriptions.ToArray();
+        }
+
+        foreach (var onMessage in snapshot)
         {
             try
             {
