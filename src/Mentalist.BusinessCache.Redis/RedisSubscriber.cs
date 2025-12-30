@@ -16,18 +16,17 @@ internal class RedisSubscriber: IRedisSubscriber
     private readonly List<Action<RedisValue>> _subscriptions = [];
     private readonly object _subscriptionsLock = new();
     private readonly RedisChannel _channel;
+    private readonly IConnectionMultiplexer _connection;
     private readonly ILogger _logger;
 
-    public RedisSubscriber(RedisChannel channel, Task<ConnectionMultiplexer> connect, ILogger logger, CancellationToken token)
+    public RedisSubscriber(RedisChannel channel, IConnectionMultiplexer connection, ILogger logger, CancellationToken token)
     {
         _channel = channel;
+        _connection = connection;
         _logger = logger;
+        _connection = connection;
 
-        Task.Factory.StartNew(
-            () => Connect(connect, token),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
+        _ = Task.Run(() => Connect(token));
     }
 
     public void Subscribe(Action<RedisValue> onMessage)
@@ -43,14 +42,13 @@ internal class RedisSubscriber: IRedisSubscriber
         _publications.Writer.TryWrite(value);
     }
 
-    private async Task Connect(Task<ConnectionMultiplexer> connect, CancellationToken token)
+    private async Task Connect(CancellationToken token)
     {
         try
         {
             token.ThrowIfCancellationRequested();
 
-            var connection = await connect;
-            var subscriber = connection.GetSubscriber();
+            var subscriber = _connection.GetSubscriber();
 
             token.Register(() => subscriber.Unsubscribe(_channel));
 
@@ -58,13 +56,7 @@ internal class RedisSubscriber: IRedisSubscriber
 
             _logger.LogInformation("Subscribed to Redis channel {RedisChannel}", _channel);
 
-#pragma warning disable CS4014
-            Task.Factory.StartNew(
-                () => Publish(subscriber, token),
-                CancellationToken.None,
-                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
-#pragma warning restore CS4014
+            _ = Task.Run(() => Publish(subscriber, token), CancellationToken.None);
         }
         catch (Exception e)
         {
@@ -123,7 +115,7 @@ internal class RedisSubscriber: IRedisSubscriber
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
+                //Console.WriteLine(e);
             }
         }
     }

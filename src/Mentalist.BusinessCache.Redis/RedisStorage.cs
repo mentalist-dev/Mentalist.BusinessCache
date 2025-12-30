@@ -58,23 +58,9 @@ public class RedisStorage: ICacheStorage
             distributedCacheRemoveQueueSize = RedisCacheOptions.DefaultDistributedCacheRemoveQueueSize;
         _removeChannel = Channel.CreateBounded<CacheItem>(distributedCacheRemoveQueueSize);
 
-        Task.Factory.StartNew(
-            () => DistributedChannelConsumer(lifetime.ApplicationStopping),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
-
-        Task.Factory.StartNew(
-            () => RefreshChannelConsumer(lifetime.ApplicationStopping),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
-
-        Task.Factory.StartNew(
-            () => RemoveChannelConsumer(lifetime.ApplicationStopping),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
+        _ = Task.Run(() => DistributedChannelConsumer(lifetime.ApplicationStopping));
+        _ = Task.Run(() => RefreshChannelConsumer(lifetime.ApplicationStopping));
+        _ = Task.Run(() => RemoveChannelConsumer(lifetime.ApplicationStopping));
     }
 
     public event CacheItemUpdateEventHandler? Updated;
@@ -193,7 +179,7 @@ public class RedisStorage: ICacheStorage
                     _circuitBreakerOpenTimestamp = DateTime.UtcNow;
                     _circuitBreakerOpen = true;
                     _metrics.ReportSecondLevelCircuitBreaker(true);
-                    _logger.LogWarning("Cache circuit breaker opened");
+                    _logger.LogError(e, "Cache circuit breaker opened");
                     return null;
                 }
             }
@@ -224,6 +210,13 @@ public class RedisStorage: ICacheStorage
 
         _metrics.ReportSecondLevelCircuitBreaker(false);
 
+        var retriesCount = _cacheOptions.RetriesCount;
+        if (retriesCount > 2)
+        {
+            // avoid many retries on sync path
+            retriesCount = 2;
+        }
+
         try
         {
             byte[]? buffer = null;
@@ -250,7 +243,7 @@ public class RedisStorage: ICacheStorage
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
-                    if (!_cacheOptions.RetriesEnabled || counter > _cacheOptions.RetriesCount)
+                    if (!_cacheOptions.RetriesEnabled || counter > retriesCount)
                     {
                         throw;
                     }
@@ -265,7 +258,7 @@ public class RedisStorage: ICacheStorage
 
                     if (_cacheOptions.RetriesDelay > 0)
                     {
-                        Thread.Sleep(_cacheOptions.RetriesDelay);
+                        BriefBackoff(counter);
                     }
                 }
             }
@@ -295,7 +288,7 @@ public class RedisStorage: ICacheStorage
                     _circuitBreakerOpenTimestamp = DateTime.UtcNow;
                     _circuitBreakerOpen = true;
                     _metrics.ReportSecondLevelCircuitBreaker(true);
-                    _logger.LogWarning("Cache circuit breaker opened");
+                    _logger.LogError(e, "Cache circuit breaker opened");
                     return null;
                 }
             }
@@ -304,6 +297,15 @@ public class RedisStorage: ICacheStorage
         _metrics.SecondLevelMis<T>();
 
         return null;
+    }
+
+    private static void BriefBackoff(int attempt)
+    {
+        Thread.Yield();
+
+        var sw = new SpinWait();
+        int spins = attempt == 1 ? 20 : 40; // keep small
+        for (var i = 0; i < spins; i++) sw.SpinOnce();
     }
 
     public void Remove<T>(string key)
@@ -453,10 +455,6 @@ public class RedisStorage: ICacheStorage
     private async Task Refresh(CacheItem item, CancellationToken cancellationToken)
     {
         var key = item.Key;
-        if (key == "51e694a9-75ef-44bb-b51e-67fbe57ecc5d.OperationContextAccessor.Users")
-        {
-            System.Diagnostics.Trace.WriteLine("ouch");
-        }
         var buffer = await _distributedCache.GetAsync(key, cancellationToken);
         if (buffer != null)
         {

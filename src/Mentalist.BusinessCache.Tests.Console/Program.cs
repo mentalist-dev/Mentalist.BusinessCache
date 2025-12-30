@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Prometheus;
 
-var redisConnectionString = "localhost:6389,connectTimeout=10000,connectRetry=5,keepAlive=60,syncTimeout=200,abortConnect=false";
+var redisConnectionString = "localhost:6379,connectTimeout=10000,connectRetry=5,keepAlive=60,syncTimeout=200,abortConnect=false";
 
 var services = new ServiceCollection();
 services.AddLogging(builder =>
@@ -25,7 +25,20 @@ services.AddCache(config => config
 var provider = services.BuildServiceProvider();
 var cache = provider.GetRequiredService<ICache>();
 
-await cache.ValidateStorageAsync(CancellationToken.None);
+for (var i = 1; i < 100; ++i)
+{
+    try
+    {
+        await cache.ValidateStorageAsync(CancellationToken.None);
+        Console.WriteLine("cache works...");
+        break;
+    }
+    catch
+    {
+        Console.WriteLine("failed...");
+        await Task.Delay(2000);
+    }
+}
 
 try
 {
