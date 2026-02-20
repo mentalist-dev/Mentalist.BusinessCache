@@ -24,8 +24,8 @@ public class RedisStorage: ICacheStorage
     private int _refreshQueueSize;
     private int _removeQueueSize;
 
-    private bool _circuitBreakerOpen;
-    private DateTime _circuitBreakerOpenTimestamp = DateTime.MinValue;
+    private int _circuitBreakerOpen;          // 0 = closed, 1 = open
+    private long _circuitBreakerOpenedTicks;  // DateTime.UtcNow.Ticks (UTC)
     private int _consecutiveExceptions;
 
     public RedisStorage(RedisCacheOptions cacheOptions
@@ -92,18 +92,10 @@ public class RedisStorage: ICacheStorage
     {
         using var timer = _metrics.SecondLevelGet<T>();
 
-        if (_cacheOptions.CircuitBreakerEnabled && 
-            _circuitBreakerOpen && 
-            _circuitBreakerOpenTimestamp > DateTime.UtcNow.Subtract(_cacheOptions.CircuitBreakerDuration))
+        if (IsCircuitBreakerOpen())
         {
             _metrics.ReportSecondLevelCircuitBreaker(true);
             return null;
-        }
-
-        if (_circuitBreakerOpen)
-        {
-            _circuitBreakerOpen = false;
-            _logger.LogWarning("Cache circuit breaker closed");
         }
 
         _metrics.ReportSecondLevelCircuitBreaker(false);
@@ -113,44 +105,39 @@ public class RedisStorage: ICacheStorage
             byte[]? buffer = null;
             var finished = false;
             var counter = 0;
+
             while (!finished)
             {
                 counter += 1;
 
                 if (counter > 1)
-                {
                     _metrics.SecondLevelRetry<T>();
-                }
 
                 try
                 {
                     buffer = await _distributedCache.GetAsync(key, token);
                     finished = true;
 
-                    if (_cacheOptions.CircuitBreakerEnabled)
-                    {
-                        Interlocked.Exchange(ref _consecutiveExceptions, 0);
-                    }
+                    RecordCircuitBreakerSuccess();
                 }
-                catch (Exception e) when (e is not OperationCanceledException)
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception e)
                 {
                     if (!_cacheOptions.RetriesEnabled || counter > _cacheOptions.RetriesCount)
-                    {
                         throw;
-                    }
 
                     if (_logger.IsEnabled(LogLevel.Debug))
                     {
                         _logger.LogDebug(e,
                             "Unable to get {CacheItemType} key {CacheKey} from distributed cache. Will retry in {CacheRetryDelay}ms.",
-                            typeof(T), key, _cacheOptions.RetriesDelay
-                        );
+                            typeof(T), key, _cacheOptions.RetriesDelay);
                     }
 
                     if (_cacheOptions.RetriesDelay > 0)
-                    {
                         await Task.Delay(_cacheOptions.RetriesDelay, token);
-                    }
                 }
             }
 
@@ -164,6 +151,10 @@ public class RedisStorage: ICacheStorage
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception e)
         {
             _metrics.SecondLevelGetFailed<T>();
@@ -171,22 +162,14 @@ public class RedisStorage: ICacheStorage
             if (_logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug(e, "Unable to get {CacheItemType} key {CacheKey} from distributed cache", typeof(T), key);
 
-            if (_cacheOptions.CircuitBreakerEnabled)
+            if (RecordCircuitBreakerFailureAndShouldShortCircuit(e))
             {
-                var exceptionCount = Interlocked.Increment(ref _consecutiveExceptions);
-                if (exceptionCount >= _cacheOptions.CircuitBreakerExceptionCount)
-                {
-                    _circuitBreakerOpenTimestamp = DateTime.UtcNow;
-                    _circuitBreakerOpen = true;
-                    _metrics.ReportSecondLevelCircuitBreaker(true);
-                    _logger.LogError(e, "Cache circuit breaker opened");
-                    return null;
-                }
+                _metrics.ReportSecondLevelCircuitBreaker(true);
+                return null;
             }
         }
 
         _metrics.SecondLevelMis<T>();
-
         return null;
     }
 
@@ -194,18 +177,10 @@ public class RedisStorage: ICacheStorage
     {
         using var timer = _metrics.SecondLevelGet<T>();
 
-        if (_cacheOptions.CircuitBreakerEnabled &&
-            _circuitBreakerOpen &&
-            _circuitBreakerOpenTimestamp > DateTime.UtcNow.Subtract(_cacheOptions.CircuitBreakerDuration))
+        if (IsCircuitBreakerOpen())
         {
             _metrics.ReportSecondLevelCircuitBreaker(true);
             return null;
-        }
-
-        if (_circuitBreakerOpen)
-        {
-            _circuitBreakerOpen = false;
-            _logger.LogWarning("Cache circuit breaker closed");
         }
 
         _metrics.ReportSecondLevelCircuitBreaker(false);
@@ -222,44 +197,35 @@ public class RedisStorage: ICacheStorage
             byte[]? buffer = null;
             var finished = false;
             var counter = 0;
+
             while (!finished)
             {
                 counter += 1;
 
                 if (counter > 1)
-                {
                     _metrics.SecondLevelRetry<T>();
-                }
 
                 try
                 {
                     buffer = _distributedCache.Get(key);
                     finished = true;
 
-                    if (_cacheOptions.CircuitBreakerEnabled)
-                    {
-                        Interlocked.Exchange(ref _consecutiveExceptions, 0);
-                    }
+                    RecordCircuitBreakerSuccess();
                 }
-                catch (Exception e) when (e is not OperationCanceledException)
+                catch (Exception e)
                 {
                     if (!_cacheOptions.RetriesEnabled || counter > retriesCount)
-                    {
                         throw;
-                    }
 
                     if (_logger.IsEnabled(LogLevel.Debug))
                     {
                         _logger.LogDebug(e,
                             "Unable to get {CacheItemType} key {CacheKey} from distributed cache. Will retry in {CacheRetryDelay}ms.",
-                            typeof(T), key, _cacheOptions.RetriesDelay
-                        );
+                            typeof(T), key, _cacheOptions.RetriesDelay);
                     }
 
                     if (_cacheOptions.RetriesDelay > 0)
-                    {
                         BriefBackoff(counter);
-                    }
                 }
             }
 
@@ -280,22 +246,14 @@ public class RedisStorage: ICacheStorage
             if (_logger.IsEnabled(LogLevel.Debug))
                 _logger.LogDebug(e, "Unable to get {CacheItemType} key {CacheKey} from distributed cache", typeof(T), key);
 
-            if (_cacheOptions.CircuitBreakerEnabled)
+            if (RecordCircuitBreakerFailureAndShouldShortCircuit(e))
             {
-                var exceptionCount = Interlocked.Increment(ref _consecutiveExceptions);
-                if (exceptionCount >= _cacheOptions.CircuitBreakerExceptionCount)
-                {
-                    _circuitBreakerOpenTimestamp = DateTime.UtcNow;
-                    _circuitBreakerOpen = true;
-                    _metrics.ReportSecondLevelCircuitBreaker(true);
-                    _logger.LogError(e, "Cache circuit breaker opened");
-                    return null;
-                }
+                _metrics.ReportSecondLevelCircuitBreaker(true);
+                return null;
             }
         }
 
         _metrics.SecondLevelMis<T>();
-
         return null;
     }
 
@@ -340,7 +298,7 @@ public class RedisStorage: ICacheStorage
     {
         try
         {
-            var channel = _connection.Create(new RedisChannel(_cacheOptions.RedisSubscriptionChannel, RedisChannel.PatternMode.Auto));
+            var channel = _connection.GetOrCreate(new RedisChannel(_cacheOptions.RedisSubscriptionChannel, RedisChannel.PatternMode.Auto));
             channel.Subscribe(redis =>
             {
                 var message = redis.ToString();
@@ -525,7 +483,66 @@ public class RedisStorage: ICacheStorage
         await _distributedCache.RemoveAsync(key, cancellationToken);
 
         var message = $"R{id}{key}";
-        var channel = _connection.Create(new RedisChannel(_cacheOptions.RedisSubscriptionChannel, RedisChannel.PatternMode.Auto));
+        var channel = _connection.GetOrCreate(new RedisChannel(_cacheOptions.RedisSubscriptionChannel, RedisChannel.PatternMode.Auto));
         channel.Publish(new RedisValue(message));
+    }
+
+    private bool IsCircuitBreakerOpen()
+    {
+        if (!_cacheOptions.CircuitBreakerEnabled)
+            return false;
+
+        if (Volatile.Read(ref _circuitBreakerOpen) == 0)
+            return false;
+
+        var openedTicks = Interlocked.Read(ref _circuitBreakerOpenedTicks);
+        var openedUtc = new DateTime(openedTicks, DateTimeKind.Utc);
+
+        // Still within open window => short-circuit
+        if (openedUtc > DateTime.UtcNow.Subtract(_cacheOptions.CircuitBreakerDuration))
+            return true;
+
+        // Window elapsed => close breaker (once)
+        CloseCircuitBreaker();
+        return false;
+    }
+
+    private void CloseCircuitBreaker()
+    {
+        // Only one thread performs the close/log/reset
+        if (Interlocked.Exchange(ref _circuitBreakerOpen, 0) == 1)
+        {
+            Interlocked.Exchange(ref _consecutiveExceptions, 0);
+            _logger.LogWarning("Cache circuit breaker closed");
+        }
+    }
+
+    private void RecordCircuitBreakerSuccess()
+    {
+        if (!_cacheOptions.CircuitBreakerEnabled)
+            return;
+
+        Interlocked.Exchange(ref _consecutiveExceptions, 0);
+    }
+
+    private bool RecordCircuitBreakerFailureAndShouldShortCircuit(Exception e)
+    {
+        if (!_cacheOptions.CircuitBreakerEnabled)
+            return false;
+
+        var exceptionCount = Interlocked.Increment(ref _consecutiveExceptions);
+        if (exceptionCount < _cacheOptions.CircuitBreakerExceptionCount)
+            return false;
+
+        // timestamp first, then open flag (ordering matters)
+        Interlocked.Exchange(ref _circuitBreakerOpenedTicks, DateTime.UtcNow.Ticks);
+
+        // Only one thread logs "opened"
+        if (Interlocked.Exchange(ref _circuitBreakerOpen, 1) == 0)
+        {
+            _logger.LogError(e, "Cache circuit breaker opened");
+        }
+
+        return true;
     }
 }

@@ -157,8 +157,8 @@ public class Cache : ICache
             return item;
         }
 
-        var storageEnabled = options.StorageEnabled ?? item?.Options?.StorageEnabled ?? true;
-        if (!storageEnabled)
+        var storageEnabled = options.StorageEnabled ?? true;
+        if (storageEnabled)
         {
             try
             {
@@ -201,7 +201,7 @@ public class Cache : ICache
             return item;
         }
 
-        var storageEnabled = options.StorageEnabled ?? item?.Options?.StorageEnabled ?? true;
+        var storageEnabled = options.StorageEnabled ?? true;
         if (storageEnabled)
         {
             try
@@ -284,8 +284,6 @@ public class Cache : ICache
         return item;
     }
 
-    // private readonly ConcurrentDictionary<string, Delay> _refreshDelays = new();
-    private readonly IMemoryCache _refreshDelays = new MemoryCache(new MemoryCacheOptions());
 
     private void RefreshAfterGet<T>(CacheItem<T> item)
     {
@@ -300,24 +298,26 @@ public class Cache : ICache
             return;
         }
 
-        var now = DateTime.UtcNow;
+        var markerKey = RefreshKey(item.Key);
+        var nowTicks = DateTime.UtcNow.Ticks;
 
-        // Use MemoryCache to store "last refresh time" per key with an absolute expiration
-        var lastRefresh = _refreshDelays.GetOrCreate(item.Key, entry =>
+        // Get last refresh tick
+        var lastTicks = _memoryCache.Get<long?>(markerKey);
+        if (lastTicks.HasValue)
         {
-            entry.AbsoluteExpirationRelativeToNow = RefreshDelaysMaxAge;
-            return now;
+            var elapsed = TimeSpan.FromTicks(nowTicks - lastTicks.Value);
+            if (elapsed < _options.RefreshAfterGetDelay)
+                return;
+        }
+
+        // Update marker with an expiration so it doesn't live forever
+        _memoryCache.Set(markerKey, nowTicks, new MemoryCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = RefreshDelaysMaxAge
         });
 
-        // only refresh if we’re past the delay
-        if (now - lastRefresh >= _options.RefreshAfterGetDelay)
-        {
-            _refreshDelays.Set(item.Key, now, new MemoryCacheEntryOptions
-            {
-                AbsoluteExpirationRelativeToNow = RefreshDelaysMaxAge
-            });
-
-            _storage.Refresh(item);
-        }
+        _storage.Refresh(item);
     }
+
+    private string RefreshKey(string key) => $"__refresh_delay__:{key}";
 }

@@ -6,26 +6,31 @@ namespace Mentalist.BusinessCache.Redis;
 
 public interface IRedisConnection
 {
-    IRedisSubscriber Create(RedisChannel channel);
+    IRedisSubscriber GetOrCreate(RedisChannel channel);
 }
 
-public class RedisConnection(
+public sealed class RedisConnection(
     IConnectionMultiplexer multiplexer,
     ICacheLifetime lifetime,
     ILogger<RedisConnection> logger)
     : IRedisConnection
 {
-    private readonly ConcurrentDictionary<string, Lazy<RedisSubscriber>> _subscribers = new();
-    private readonly ILogger _logger = logger;
+    private readonly ConcurrentDictionary<RedisChannel, Lazy<RedisSubscriber>> _subscribers = new();
 
-    public IRedisSubscriber Create(RedisChannel channel)
+    public IRedisSubscriber GetOrCreate(RedisChannel channel)
     {
-        var value = _subscribers.GetOrAdd(channel.ToString(), new Lazy<RedisSubscriber>(() => CreateSubscriber(channel)));
-        return value.Value;
+        var lazy = _subscribers.GetOrAdd(
+            channel,
+            static (ch, state) => new Lazy<RedisSubscriber>(
+                () => state.CreateSubscriber(ch),
+                LazyThreadSafetyMode.ExecutionAndPublication),
+            this);
+
+        return lazy.Value;
     }
 
     private RedisSubscriber CreateSubscriber(RedisChannel channel)
     {
-        return new RedisSubscriber(channel, multiplexer, _logger, lifetime.ApplicationStopping);
+        return new RedisSubscriber(channel, multiplexer, logger, lifetime.ApplicationStopping);
     }
 }
